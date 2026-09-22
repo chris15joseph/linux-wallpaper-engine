@@ -1,26 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import { useIntersectionObserver } from "@uidotdev/usehooks"
-import { ArrowDown, ArrowLeft, Star, Store } from "lucide-react"
-import { WallpaperGridLayout } from "@/components/wallpaper/wallpaper-grid-layout"
-import { WorkshopConnectionPrompt } from "@/components/workshop/workshop-connection-prompt"
-import { WorkshopDiscoverSection } from "@/components/workshop/workshop-discover-section"
-import { WorkshopPagination } from "@/components/workshop/workshop-pagination"
-import { IconButton } from "@/components/ui/icon-button"
-import { Skeleton } from "@/components/ui/skeleton"
-import { trpc } from "@/lib/trpc"
-import { cn, toWallpaper } from "@/lib/utils"
-import { useGlass } from "@/hooks/use-glass"
-import type { Wallpaper } from "../../../shared/constants/wallpaper"
-import type { WorkshopSortBy } from "../../../shared/constants/workshop"
-import { DEFAULT_FAVORITE_DISCOVER_SECTION_IDS } from "../../../shared/constants/workshop"
-import type { RouterOutputs } from "../../../main/trpc/router"
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useIntersectionObserver } from '@uidotdev/usehooks'
+import { ArrowDown, ArrowLeft, Star, Store } from 'lucide-react'
+import { WallpaperGridLayout } from '@/components/wallpaper/wallpaper-grid-layout'
+import { WorkshopConnectionPrompt } from '@/components/workshop/workshop-connection-prompt'
+import { WorkshopDiscoverSection } from '@/components/workshop/workshop-discover-section'
+import { WorkshopPagination } from '@/components/workshop/workshop-pagination'
+import { IconButton } from '@/components/ui/icon-button'
+import { Skeleton } from '@/components/ui/skeleton'
+import { trpc } from '@/lib/trpc'
+import { cn, toWallpaper } from '@/lib/utils'
+import { useGlass } from '@/hooks/use-glass'
+import type { Wallpaper } from '../../../shared/constants/wallpaper'
+import type { WorkshopSortBy } from '../../../shared/constants/workshop'
+import { DEFAULT_FAVORITE_DISCOVER_SECTION_IDS } from '../../../shared/constants/workshop'
+import type { RouterOutputs } from '../../../main/trpc/router'
 import {
   DISCOVER_SECTION_BATCH_SIZE,
   SKELETON_SECTION_COUNT,
   SKELETON_CARDS_PER_SECTION,
-} from "../../../shared/constants/grid"
+} from '../../../shared/constants/grid'
 
-type WorkshopDiscoverSectionData = RouterOutputs["workshop"]["discover"]["sections"][number]
+type WorkshopDiscoverSectionData = RouterOutputs['workshop']['discover']['sections'][number]
 
 interface WorkshopDiscoverViewProps {
   sortBy: WorkshopSortBy
@@ -43,13 +43,14 @@ export function WorkshopDiscoverView({
   const utils = trpc.useUtils()
 
   const { data: settings } = trpc.settings.get.useQuery()
-  const favoriteSectionIds = settings?.favoriteDiscoverSectionIds ?? DEFAULT_FAVORITE_DISCOVER_SECTION_IDS
+  const favoriteSectionIds =
+    settings?.favoriteDiscoverSectionIds ?? DEFAULT_FAVORITE_DISCOVER_SECTION_IDS
 
   const updateSettings = trpc.settings.update.useMutation({
     onMutate: async (input) => {
       await utils.settings.get.cancel()
       const previousSettings = utils.settings.get.getData()
-      utils.settings.get.setData(undefined, currentSettings => {
+      utils.settings.get.setData(undefined, (currentSettings) => {
         if (!currentSettings) return currentSettings
         return { ...currentSettings, ...input }
       })
@@ -75,9 +76,7 @@ export function WorkshopDiscoverView({
   const isFocused = focusedSectionId !== null
 
   const { data, error, isLoading, isFetching } = trpc.workshop.discover.useQuery(
-    isFocused
-      ? { sortBy, focusedSectionId, page: focusedPage }
-      : { sortBy },
+    isFocused ? { sortBy, focusedSectionId, page: focusedPage } : { sortBy },
   )
 
   trpc.workshop.onConnectionEvent.useSubscription(undefined, {
@@ -88,23 +87,24 @@ export function WorkshopDiscoverView({
 
   const [loadMoreRef, loadMoreEntry] = useIntersectionObserver({
     threshold: 0,
-    rootMargin: "360px 0px",
+    rootMargin: '360px 0px',
   })
 
   const sections = useMemo(() => {
-    const mapped = data?.sections.map((section: WorkshopDiscoverSectionData) => ({
-      id: section.id,
-      title: section.title,
-      wallpapers: section.items.map(toWallpaper),
-      page: section.page,
-      totalResults: section.totalResults,
-      resultsPerPage: section.resultsPerPage,
-      hasNextPage: section.hasNextPage,
-    })) ?? []
+    const mapped =
+      data?.sections.map((section: WorkshopDiscoverSectionData) => ({
+        id: section.id,
+        title: section.title,
+        wallpapers: section.items.map(toWallpaper),
+        page: section.page,
+        totalResults: section.totalResults,
+        resultsPerPage: section.resultsPerPage,
+        hasNextPage: section.hasNextPage,
+      })) ?? []
     if (isFocused) return mapped
     const favoriteSet = new Set(favoriteSectionIds)
-    const favorites = mapped.filter(section => favoriteSet.has(section.id))
-    const rest = mapped.filter(section => !favoriteSet.has(section.id))
+    const favorites = mapped.filter((section) => favoriteSet.has(section.id))
+    const rest = mapped.filter((section) => !favoriteSet.has(section.id))
     return [...favorites, ...rest]
   }, [data, favoriteSectionIds, isFocused])
 
@@ -119,7 +119,9 @@ export function WorkshopDiscoverView({
     if (isFocused) return
     const isIntersecting = loadMoreEntry?.isIntersecting ?? false
     if (isIntersecting && !wasIntersectingRef.current && hasMore) {
-      setVisibleSectionCount(current => Math.min(current + DISCOVER_SECTION_BATCH_SIZE, sections.length))
+      setVisibleSectionCount((current) =>
+        Math.min(current + DISCOVER_SECTION_BATCH_SIZE, sections.length),
+      )
     }
     wasIntersectingRef.current = isIntersecting
   }, [loadMoreEntry?.isIntersecting, hasMore, sections.length, isFocused])
@@ -140,10 +142,10 @@ export function WorkshopDiscoverView({
         {Array.from({ length: SKELETON_SECTION_COUNT }).map((_, index) => (
           <div key={index} className="space-y-4">
             <div className="space-y-2">
-              <div className="flex items-center justify-between gap-3 border-b border-border pb-2">
+              <div className="border-border flex items-center justify-between gap-3 border-b pb-2">
                 <div className="flex items-baseline gap-3">
                   <Skeleton className="h-7 w-40" />
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-muted-foreground text-xs">
                     See more <ArrowDown className="inline-block size-3" />
                   </span>
                 </div>
@@ -176,7 +178,7 @@ export function WorkshopDiscoverView({
     const focusedSection = sections[0]
     return (
       <div className="space-y-4">
-        <div className="flex items-center justify-between gap-3 border-b border-border pb-2">
+        <div className="border-border flex items-center justify-between gap-3 border-b pb-2">
           <div className="flex items-center gap-3">
             <IconButton
               icon={ArrowLeft}
@@ -185,7 +187,7 @@ export function WorkshopDiscoverView({
               aria-label="Back to categories"
               title="Back to categories"
             />
-            <h2 className="text-xl font-semibold">{focusedSection?.title ?? ""}</h2>
+            <h2 className="text-xl font-semibold">{focusedSection?.title ?? ''}</h2>
           </div>
         </div>
 
@@ -250,7 +252,12 @@ export function WorkshopDiscoverView({
 
       {hasMore && (
         <div ref={loadMoreRef} className="flex justify-center py-2">
-          <div className={cn(glass, "rounded-full px-4 py-2 text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground")}>
+          <div
+            className={cn(
+              glass,
+              'text-muted-foreground rounded-full px-4 py-2 text-xs font-medium tracking-[0.24em] uppercase',
+            )}
+          >
             Loading more categories
           </div>
         </div>

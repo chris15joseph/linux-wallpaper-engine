@@ -1,21 +1,25 @@
-import { createFileRoute } from "@tanstack/react-router"
-import { useEffect, useState } from "react"
-import { useAtom } from "jotai"
-import { PageHeader } from "@/components/page-header"
-import { WorkshopToolbar } from "@/components/workshop/workshop-toolbar"
-import { WorkshopBrowseView } from "@/components/workshop/workshop-browse-view"
-import { WorkshopDiscoverView } from "@/components/workshop/workshop-discover-view"
-import { WorkshopDetailsPanel } from "@/components/workshop/workshop-details-panel"
-import { WallpaperGridShell } from "@/components/wallpaper/wallpaper-grid-shell"
-import { ScrollToTopButton } from "@/components/scroll-to-top-button"
-import { RefreshButton } from "@/components/wallpaper/refresh-button"
-import { useDebouncedWorkshopSearchQuery, useWorkshopFilter, useWorkshopSort } from "@/contexts/workshop-search-context"
-import { useWallpaperSelection } from "@/hooks/use-wallpaper-selection"
-import { useWallpaperBackground } from "@/contexts/wallpaper-background-context"
-import { trpc } from "@/lib/trpc"
-import { workshopModeAtom } from "@/contexts/atoms/workshop-atoms"
+import { createFileRoute } from '@tanstack/react-router'
+import { useEffect, useState } from 'react'
+import { useAtom } from 'jotai'
+import { PageHeader } from '@/components/page-header'
+import { WorkshopToolbar } from '@/components/workshop/workshop-toolbar'
+import { WorkshopBrowseView } from '@/components/workshop/workshop-browse-view'
+import { WorkshopDiscoverView } from '@/components/workshop/workshop-discover-view'
+import { WorkshopDetailsPanel } from '@/components/workshop/workshop-details-panel'
+import { WallpaperGridShell } from '@/components/wallpaper/wallpaper-grid-shell'
+import { ScrollToTopButton } from '@/components/scroll-to-top-button'
+import { RefreshButton } from '@/components/wallpaper/refresh-button'
+import {
+  useDebouncedWorkshopSearchQuery,
+  useWorkshopFilter,
+  useWorkshopSort,
+} from '@/contexts/workshop-search-context'
+import { useWallpaperSelection } from '@/hooks/use-wallpaper-selection'
+import { useWallpaperBackground } from '@/contexts/wallpaper-background-context'
+import { trpc } from '@/lib/trpc'
+import { workshopModeAtom } from '@/contexts/atoms/workshop-atoms'
 
-export const Route = createFileRoute("/workshop")({
+export const Route = createFileRoute('/workshop')({
   component: WorkshopPage,
 })
 
@@ -30,7 +34,7 @@ function WorkshopPage() {
   const utils = trpc.useUtils()
 
   const hasSearchQuery = (debouncedSearchQuery?.trim().length ?? 0) > 0
-  const showBrowse = mode === "browse" || hasSearchQuery
+  const showBrowse = mode === 'browse' || hasSearchQuery
 
   // Sync selected wallpaper thumbnail as blurred page background
   useEffect(() => {
@@ -40,19 +44,21 @@ function WorkshopPage() {
   trpc.workshop.onConnectionEvent.useSubscription(undefined, {
     onData: () => {
       if (selectedWallpaper) {
-        void utils.workshop.status.invalidate({ workshopId: selectedWallpaper.workshopId ?? selectedWallpaper.id })
+        void utils.workshop.status.invalidate({
+          workshopId: selectedWallpaper.workshopId ?? selectedWallpaper.id,
+        })
       }
     },
   })
 
   const viewKey = [
     debouncedSearchQuery,
-    filterType.join(","),
-    filterAgeRating.join(","),
-    filterTags.join(","),
-    filterResolution.join(","),
+    filterType.join(','),
+    filterAgeRating.join(','),
+    filterTags.join(','),
+    filterResolution.join(','),
     workshopSortBy,
-  ].join("|")
+  ].join('|')
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
@@ -66,7 +72,7 @@ function WorkshopPage() {
   }
 
   return (
-    <div className="flex flex-col h-full p-6">
+    <div className="flex h-full flex-col p-6">
       <PageHeader
         title="Workshop"
         description="Browse wallpapers from Steam Workshop"
@@ -74,19 +80,21 @@ function WorkshopPage() {
       >
         <WorkshopToolbar
           showBrowse={showBrowse}
-          onSelectDiscover={() => setMode("discover")}
-          onSelectBrowse={() => setMode("browse")}
+          onSelectDiscover={() => setMode('discover')}
+          onSelectBrowse={() => setMode('browse')}
         />
       </PageHeader>
 
       <WallpaperGridShell
         detailsKey={selectedWallpaper?.id}
-        details={selectedWallpaper ? (
-          <WorkshopDetailsPanel
-            wallpaper={selectedWallpaper}
-            onClose={() => setSelectedWallpaper(null)}
-          />
-        ) : null}
+        details={
+          selectedWallpaper ? (
+            <WorkshopDetailsPanel
+              wallpaper={selectedWallpaper}
+              onClose={() => setSelectedWallpaper(null)}
+            />
+          ) : null
+        }
       >
         {(columns) => (
           <div className="space-y-4">

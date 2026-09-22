@@ -1,13 +1,13 @@
-import { useMemo, useState } from "react"
-import { Store } from "lucide-react"
-import { WallpaperGridLayout } from "@/components/wallpaper/wallpaper-grid-layout"
-import { WorkshopConnectionPrompt } from "@/components/workshop/workshop-connection-prompt"
-import { WorkshopPagination } from "@/components/workshop/workshop-pagination"
-import { trpc } from "@/lib/trpc"
-import { toWallpaper } from "@/lib/utils"
-import { encodeWorkshopCursor } from "../../../shared/utils/workshop-cursor"
-import type { Wallpaper } from "../../../shared/constants/wallpaper"
-import type { WorkshopSortBy } from "../../../shared/constants/workshop"
+import { useMemo, useState } from 'react'
+import { Store } from 'lucide-react'
+import { WallpaperGridLayout } from '@/components/wallpaper/wallpaper-grid-layout'
+import { WorkshopConnectionPrompt } from '@/components/workshop/workshop-connection-prompt'
+import { WorkshopPagination } from '@/components/workshop/workshop-pagination'
+import { trpc } from '@/lib/trpc'
+import { toWallpaper } from '@/lib/utils'
+import { encodeWorkshopCursor } from '../../../shared/utils/workshop-cursor'
+import type { Wallpaper } from '../../../shared/constants/wallpaper'
+import type { WorkshopSortBy } from '../../../shared/constants/workshop'
 
 interface WorkshopBrowseViewProps {
   searchQuery: string
@@ -38,10 +38,7 @@ export function WorkshopBrowseView({
     },
   })
 
-  const wallpapers = useMemo(
-    () => data?.items.map(toWallpaper) ?? [],
-    [data],
-  )
+  const wallpapers = useMemo(() => data?.items.map(toWallpaper) ?? [], [data])
 
   if (error) return <WorkshopConnectionPrompt message={error.message} />
 
