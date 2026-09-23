@@ -1,4 +1,10 @@
-import type { WorkshopDiscoverOptions, WorkshopDiscoverResult, WorkshopQueryOptions, WorkshopQueryResult, WorkshopStatus } from './workshop.types'
+import type {
+  WorkshopDiscoverOptions,
+  WorkshopDiscoverResult,
+  WorkshopQueryOptions,
+  WorkshopQueryResult,
+  WorkshopStatus,
+} from './workshop.types'
 import type { WorkshopConnectionEvent } from './workshop'
 import type { AgeRating } from '../../../shared/constants/wallpaper'
 

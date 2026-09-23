@@ -26,7 +26,9 @@ describe('parseWorkshopAgeRating', () => {
 
 describe('mapWorkshopAgeRatings', () => {
   it('maps a single item id to its resolved age rating', () => {
-    const ratings = mapWorkshopAgeRatings([{ publishedFileId: BigInt('123'), tags: ['Scene', 'Everyone'] }])
+    const ratings = mapWorkshopAgeRatings([
+      { publishedFileId: BigInt('123'), tags: ['Scene', 'Everyone'] },
+    ])
     expect(ratings).toEqual({ '123': 'g' })
   })
 
@@ -40,7 +42,9 @@ describe('mapWorkshopAgeRatings', () => {
   })
 
   it('skips items with no matching rating tag', () => {
-    const ratings = mapWorkshopAgeRatings([{ publishedFileId: BigInt('456'), tags: ['Scene', '4K Ultra HD'] }])
+    const ratings = mapWorkshopAgeRatings([
+      { publishedFileId: BigInt('456'), tags: ['Scene', '4K Ultra HD'] },
+    ])
     expect(ratings).toEqual({})
   })
 
