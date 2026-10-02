@@ -1,6 +1,9 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { Wallpaper } from '../../shared/constants/wallpaper'
+import {
+  BACKEND_NOT_INSTALLED_ERROR_MESSAGE,
+  type Wallpaper,
+} from '../../shared/constants/wallpaper'
 import { DEFAULT_PLAYLIST_SETTINGS } from '../../shared/constants/playlist'
 import { DEFAULT_SETTINGS } from '../../shared/constants/app'
 import { wallpaperService } from '../services/wallpaper/wallpaper'
@@ -102,6 +105,8 @@ export async function installFixtures(dataDirectory: string) {
       backendInstalled: process.env.LWE_DEV_SCENARIO !== 'missing-backend',
     }),
     apply: async (target) => {
+      if (process.env.LWE_DEV_SCENARIO === 'missing-backend')
+        return { success: false, error: BACKEND_NOT_INSTALLED_ERROR_MESSAGE }
       if (target.kind !== 'wallpaper') return { success: true }
       const wallpaper = wallpapers.find((item) => item.path === target.options.backgroundId)
       if (!wallpaper) return { success: false, error: 'Fixture wallpaper not found' }
@@ -139,11 +144,13 @@ export async function installFixtures(dataDirectory: string) {
       if (!playlist) return { success: false, error: 'Playlist not found' }
       const wallpaper = wallpapers.find((item) => playlist.items.includes(item.path))
       if (!wallpaper) return { success: false, error: 'No installed wallpapers in playlist' }
-      for (const screen of screens)
-        await wallpaperService.apply({
+      for (const screen of screens) {
+        const result = await wallpaperService.apply({
           kind: 'wallpaper',
           options: { backgroundId: wallpaper.path, screen },
         })
+        if (!result.success) return result
+      }
       playlistService.setActivePlaylist(name, screens)
       if (stampLastApplied) await playlistService.stampLastApplied(name)
       return { success: true }

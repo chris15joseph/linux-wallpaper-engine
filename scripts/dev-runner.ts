@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { createRequire, builtinModules } from 'node:module'
 import path from 'node:path'
@@ -8,6 +8,9 @@ import { build, createServer, type ViteDevServer } from 'vite-plus'
 import { DEV_READY_PREFIX, DEV_HEALTH_PATH } from '../src/shared/constants/development.ts'
 import { stopOwnedProcess } from './dev-process.ts'
 
+// This command owns a development environment. Vite build otherwise initializes
+// an unset NODE_ENV to production, causing the subsequent server to skip refresh.
+process.env.NODE_ENV = 'development'
 const root = process.cwd()
 const worktreeId = createHash('sha256')
   .update(await fs.realpath(root))
@@ -19,12 +22,12 @@ const scenario =
 if (!['populated', 'empty', 'missing-backend'].includes(scenario))
   throw new Error(`Unknown scenario: ${scenario}`)
 if (!fixtureMode && scenario !== 'populated') throw new Error('--scenario requires --fixtures')
-const dataDirectory = path.resolve(
-  root,
-  '.dev-runtime',
-  worktreeId,
-  fixtureMode ? `fixtures-${scenario}` : 'web',
-)
+const worktreeDirectory = path.resolve(root, '.dev-runtime', worktreeId)
+const runDirectory = path.join(worktreeDirectory, 'runs', randomUUID())
+const dataDirectory = fixtureMode
+  ? path.join(runDirectory, 'data')
+  : path.join(worktreeDirectory, 'web')
+const buildDirectory = path.join(runDirectory, 'backend')
 const token = randomBytes(32).toString('hex')
 const require = createRequire(import.meta.url)
 const electron: string = require('electron')
@@ -46,9 +49,10 @@ try {
   await fs.mkdir(dataDirectory, { recursive: true })
   await build({
     configFile: false,
+    mode: 'development',
     resolve: { conditions: ['node'], mainFields: ['module', 'main'] },
     build: {
-      outDir: '.vite/dev',
+      outDir: buildDirectory,
       emptyOutDir: true,
       target: 'node22',
       copyPublicDir: false,
@@ -57,7 +61,7 @@ try {
     },
   })
   const backendReady = new Promise<number>((resolve, reject) => {
-    child = spawn(electron, [path.join(root, '.vite/dev/backend.cjs')], {
+    child = spawn(electron, [path.join(buildDirectory, 'backend.cjs')], {
       cwd: root,
       stdio: ['ignore', 'pipe', 'inherit'],
       env: {
@@ -111,6 +115,8 @@ try {
   if (!health.ok) throw new Error(`Backend readiness failed: ${health.status}`)
   frontend = await createServer({
     configFile: path.join(root, 'vite.renderer.config.mts'),
+    mode: 'development',
+    cacheDir: path.join(runDirectory, 'vite-cache'),
     server: {
       host: '127.0.0.1',
       port: 0,
@@ -143,7 +149,8 @@ try {
   )
   // A machine-readable URL for the regression runner; includes no credentials.
   console.log(
-    'LWE_WEB_READY ' + JSON.stringify({ url, port: address.port, backendPort, dataDirectory }),
+    'LWE_WEB_READY ' +
+      JSON.stringify({ url, port: address.port, backendPort, dataDirectory, buildDirectory }),
   )
 } catch (error) {
   console.error(error)

@@ -193,6 +193,15 @@ describe('development gateway with real appRouter and fixture adapters', () => {
     await installFixtures(directory)
     expect((await client.wallpaper.getWallpapers.query()).wallpapers).toHaveLength(3)
     expect(await client.wallpaper.checkBackend.query()).toEqual({ installed: false })
+    const wallpaper = (await client.wallpaper.getWallpapers.query()).wallpapers[0]
+    expect(
+      await client.wallpaper.setWallpaper.mutate({ backgroundId: wallpaper.path }),
+    ).toMatchObject({ success: false })
+    expect(await client.playlist.start.mutate({ playlistName: 'Evening rotation' })).toMatchObject({
+      success: false,
+    })
+    expect(await client.wallpaper.getActiveWallpaper.query()).toEqual([])
+    expect(await client.playlist.active.query()).toEqual([])
     vi.stubEnv('LWE_DEV_SCENARIO', 'populated')
     await installFixtures(directory)
   })

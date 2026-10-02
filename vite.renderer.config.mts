@@ -16,6 +16,17 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  server: {
+    watch: {
+      ignored: [
+        '**/.dev-runtime/**',
+        '**/test-results/**',
+        '**/playwright-report/**',
+        '**/.vite/**',
+        '**/out/**',
+      ],
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src/renderer'),

@@ -1,61 +1,56 @@
 import { spawn } from 'node:child_process'
-import { createInterface } from 'node:readline'
 import { createRequire } from 'node:module'
 import fs from 'node:fs/promises'
 import { stopOwnedProcess } from './dev-process.ts'
+import { startFixtureRunner } from './fixture-runner.ts'
 
 // Explicit verification command only: never runs during unit tests or installation.
 const require = createRequire(import.meta.url)
 await fs.mkdir('test-results', { recursive: true })
 const logs: string[] = []
-const runner = spawn(process.execPath, ['scripts/dev-runner.ts', '--fixtures'], {
-  stdio: ['ignore', 'pipe', 'pipe'],
-})
+const runners: ReturnType<typeof startFixtureRunner>[] = []
 let tests: ReturnType<typeof spawn> | undefined
 let stopping = false
 let backendFailed = false
 async function cleanup() {
   stopping = true
-  await Promise.all([stopOwnedProcess(runner), tests ? stopOwnedProcess(tests) : undefined])
+  await Promise.all([
+    ...runners.map((runner) => stopOwnedProcess(runner.process)),
+    tests ? stopOwnedProcess(tests) : undefined,
+  ])
   await fs.writeFile('test-results/dev-server.log', logs.join('\n'))
 }
 for (const signal of ['SIGINT', 'SIGTERM'] as const)
   process.on(signal, () => {
     void cleanup().then(() => process.exit(1))
   })
-runner.stderr.on('data', (chunk: Buffer) => {
-  logs.push(chunk.toString())
-  process.stderr.write(chunk)
-})
 try {
-  const url = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error('Development runner readiness timed out')),
-      60000,
-    )
-    runner.once('error', (error) => {
-      clearTimeout(timeout)
-      reject(error)
+  for (const scenario of ['populated', 'empty', 'missing-backend']) {
+    const runner = startFixtureRunner(scenario, (line) => {
+      logs.push(`[${scenario}] ${line}`)
+      console.log(`[${scenario}] ${line}`)
     })
-    runner.once('exit', (code) => {
-      if (!stopping) backendFailed = true
-      clearTimeout(timeout)
-      reject(new Error(`Development runner exited (${code})`))
-      tests?.kill('SIGTERM')
-    })
-    createInterface({ input: runner.stdout }).on('line', (line) => {
-      logs.push(line)
-      console.log(line)
-      if (line.startsWith('LWE_WEB_READY ')) {
-        clearTimeout(timeout)
-        resolve((JSON.parse(line.slice(14)) as { url: string }).url)
+    runners.push(runner)
+    runner.process.once('exit', () => {
+      if (!stopping) {
+        backendFailed = true
+        tests?.kill('SIGTERM')
       }
     })
-  })
+  }
+  const [populated, empty, missing] = await Promise.all(runners.map((runner) => runner.ready))
   tests = spawn(
     process.execPath,
     [require.resolve('@playwright/test/cli'), 'test', ...process.argv.slice(2)],
-    { stdio: 'inherit', env: { ...process.env, LWE_BROWSER_URL: url } },
+    {
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        LWE_BROWSER_URL: populated.url,
+        LWE_BROWSER_EMPTY_URL: empty.url,
+        LWE_BROWSER_MISSING_URL: missing.url,
+      },
+    },
   )
   const testExitCode = await new Promise<number>((resolve, reject) => {
     tests!.once('error', reject)
