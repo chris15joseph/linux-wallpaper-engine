@@ -50,7 +50,7 @@ class WallpaperService implements IWallpaperService {
   private state = wallpaperStateManager
 
   private constructor() {
-    this.syncAndReapply()
+    void this.syncAndReapply()
   }
 
   static getInstance(): WallpaperService {
@@ -739,7 +739,7 @@ class WallpaperService implements IWallpaperService {
   private debouncedReapply(): void {
     if (this.reapplyTimer) clearTimeout(this.reapplyTimer)
     this.reapplyTimer = setTimeout(() => {
-      this.reapplyAll()
+      void this.reapplyAll()
     }, 500)
   }
 
