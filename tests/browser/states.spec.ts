@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { withEvidence } from './evidence'
+import { withEvidence, selectWallpaper } from './evidence'
 
 if (!process.env.LWE_BROWSER_EMPTY_URL || !process.env.LWE_BROWSER_MISSING_URL)
   throw new Error('Use vp run verify:web to start isolated fixtures')
@@ -15,7 +15,7 @@ test('fixture boundary state renders and actions remain honest', async ({ page }
       await expect(page.getByText('DP-1', { exact: true }).first()).toBeVisible()
       await expect(page.getByText('No active wallpaper', { exact: true })).toBeVisible()
     } else {
-      await page.getByRole('heading', { name: 'Aurora Coast', exact: true }).click()
+      await selectWallpaper(page, 'Aurora Coast')
       await page.getByRole('button', { name: 'Apply', exact: true }).click()
       await expect(
         page.getByRole('heading', { name: 'linux-wallpaperengine is missing' }),

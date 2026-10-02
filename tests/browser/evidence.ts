@@ -39,3 +39,13 @@ export async function withEvidence(
     })
   }
 }
+
+// Keyboard-navigation branches expose the card as a semantic button. Retain a
+// heading target for the original card UI while selecting through the real control.
+export async function selectWallpaper(page: Page, title: string) {
+  const heading = page.getByRole('heading', { name: title, exact: true })
+  await expect(heading).toBeVisible()
+  const button = page.getByRole('main').getByRole('button', { name: title, exact: true })
+  if (await button.count()) await button.click()
+  else await heading.click()
+}

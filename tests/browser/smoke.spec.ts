@@ -1,4 +1,4 @@
-import { withEvidence } from './evidence'
+import { withEvidence, selectWallpaper } from './evidence'
 import { test, expect } from '@playwright/test'
 
 if (!process.env.LWE_BROWSER_URL)
@@ -33,7 +33,7 @@ test('same renderer loads library, media, displays, playlists, settings and Work
             observer.getByRole('heading', { name: 'Displays', exact: true }),
           ).toBeVisible()
           await expect(observer.getByText('No active wallpaper', { exact: true })).toBeVisible()
-          await page.getByRole('heading', { name: 'Aurora Coast', exact: true }).click()
+          await selectWallpaper(page, 'Aurora Coast')
           await page.getByRole('button', { name: 'Apply', exact: true }).click()
           await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible()
           // Another mounted client must update through WS invalidation before the 5s poll.
