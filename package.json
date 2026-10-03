@@ -42,7 +42,6 @@
     "typecheck": "tsc --noEmit",
     "postinstall": "bun scripts/postinstall.ts",
     "dev:desktop": "electron-forge start",
-    "dev:web": "node scripts/dev-runner.ts",
     "build:web": "vp build",
     "nix:lock": "bun2nix -o distro/nix/bun.nix",
     "check:all": "vp check && vp test"
