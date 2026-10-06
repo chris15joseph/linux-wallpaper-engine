@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import type { ApplyWallpaperOptions } from '../../../../shared/constants/wallpaper'
-import type { DebugInfo } from '../wallpaper.types'
+import type { DebugInfo, RemainingScreen } from '../wallpaper.types'
 
 // ── State manager — owns process tracking and active wallpaper state ───────
 
@@ -8,7 +8,7 @@ export interface IStateManager {
   // Process + screen group tracking
   getProcess(screen: string): ChildProcess | undefined
   register(screens: string[], proc: ChildProcess, options: ApplyWallpaperOptions): void
-  release(screen: string): { remaining: Array<{ screen: string; options: ApplyWallpaperOptions }> }
+  release(screen: string): { remaining: RemainingScreen[] }
   cleanupExitedProcess(proc: ChildProcess): { screens: string[] }
 
   // Active wallpaper state
@@ -16,6 +16,14 @@ export interface IStateManager {
   isActive(backgroundId: string): boolean
   save(): void
   reset(): void
+
+  // Paused (frozen) process state
+  /** Screens whose backend process is currently frozen with SIGSTOP. */
+  getPausedScreens(): string[]
+  /** Whether `screen`'s backend process is currently frozen. */
+  isPaused(screen: string): boolean
+  /** Mark screens (and every screen sharing their process) as paused or unpaused. */
+  markPaused(screens: string[], paused: boolean): void
 
   // Applied history (drives the "recent" sort)
   getAppliedHistory(): Record<string, number>

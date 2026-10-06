@@ -6,7 +6,13 @@ import { glob } from 'glob'
 import { displayService } from '../display'
 import { settingsService, type AppSettings } from '../settings'
 import { storeService } from '../store'
-import { hostSpawn, hostExecAsync, hostCommandExists, isFlatpak } from '../../utils/host'
+import {
+  backendArgPattern,
+  hostSpawn,
+  hostExecFileAsync,
+  hostCommandExists,
+  isFlatpak,
+} from '../../utils/host'
 import { WALLPAPER_ENGINE_APP_ID } from '../../../shared/constants/app'
 import {
   BACKEND_NOT_INSTALLED_ERROR_MESSAGE,
@@ -26,6 +32,12 @@ import {
   resolveThumbnail,
   parseWindowGeometry,
   resolveTimedCache,
+  buildApplyOptions,
+  pickRandomWallpaper,
+  signalWallpaperProcess,
+  listBackendProcesses,
+  isScreenBackendRunning,
+  BACKEND_PROCESS_PATTERN,
   type TimedCache,
 } from './wallpaper.utils'
 import { listProperties } from './properties'
@@ -38,6 +50,7 @@ import type {
   OverrideMutation,
   ServiceAction,
   DebugInfo,
+  RemainingScreen,
 } from './wallpaper.types'
 
 class WallpaperService implements IWallpaperService {
@@ -65,6 +78,9 @@ class WallpaperService implements IWallpaperService {
 
   listProperties = listProperties
 
+  /** Resolve settings and per-call overrides into backend apply options. */
+  buildApplyOptions = buildApplyOptions
+
   // ── Query ──────────────────────────────────────────────────────────────
 
   async query(): Promise<{
@@ -77,6 +93,7 @@ class WallpaperService implements IWallpaperService {
       this.getWallpapers(),
       this.checkBackendInstalled(),
     ])
+    await this.pruneDeadRestoredScreens()
     const active = await this.getActiveWithTitles(wallpapers)
     return { wallpapers, backendInstalled, active, appliedHistory: this.state.getAppliedHistory() }
   }
@@ -116,7 +133,7 @@ class WallpaperService implements IWallpaperService {
       // Kill any orphaned processes for this screen
       for (const screen of screens) {
         try {
-          await hostExecAsync(`pkill -9 -f "linux-wallpaperengine.*--screen-root.*${screen}"`)
+          await hostExecFileAsync('pkill', ['-9', '-f', backendArgPattern('--screen-root', screen)])
         } catch {
           /* no process found is ok */
         }
@@ -129,13 +146,104 @@ class WallpaperService implements IWallpaperService {
       const activeScreens = [...this.state.getActive().keys()]
       this.state.reset()
       try {
-        await hostExecAsync('pkill -9 -f linux-wallpaperengine')
+        await hostExecFileAsync('pkill', ['-9', '-f', BACKEND_PROCESS_PATTERN])
       } catch {
         /* no process found is ok */
       }
       invalidationService.emit('wallpaper.stopped')
       return { success: true, screens: activeScreens }
     }
+  }
+
+  /** Freeze active wallpaper processes on the requested screens. */
+  pause(screen?: string | string[]): Promise<MutationResult> {
+    return this.setPaused(screen, true)
+  }
+
+  /** Resume wallpaper processes previously paused by the app. */
+  resume(screen?: string | string[]): Promise<MutationResult> {
+    return this.setPaused(screen, false)
+  }
+
+  /** Apply an installed wallpaper that is not already active when possible. */
+  async applyRandom(screen?: string): Promise<MutationResult & { wallpaperTitle?: string }> {
+    const wallpapers = await this.getWallpapers()
+    if (wallpapers.length === 0) return { success: false, error: 'No wallpapers installed' }
+
+    const activeIds = new Set([...this.state.getActive().values()].map((item) => item.backgroundId))
+    const pick = pickRandomWallpaper(wallpapers, activeIds)
+    const settings = await settingsService.loadSettings()
+    const options = buildApplyOptions(settings, { backgroundId: pick.path, screen })
+    const result = await this.apply({ kind: 'wallpaper', options })
+    if (result.success && result.screens) playlistService.clearActivePlaylist(result.screens)
+    return { ...result, wallpaperTitle: pick.title }
+  }
+
+  /** Return screen keys with an active wallpaper process. */
+  getActiveScreens(): string[] {
+    return [...this.state.getActive().keys()]
+  }
+
+  /** Return screen keys whose wallpaper process is paused. */
+  getPausedScreens(): string[] {
+    return this.state.getPausedScreens()
+  }
+
+  /**
+   * Signal each target's process with SIGSTOP/SIGCONT. Screens sharing a
+   * process flip together, so later group members are skipped once their
+   * process has been signalled.
+   */
+  private async setPaused(
+    screen: string | string[] | undefined,
+    paused: boolean,
+  ): Promise<MutationResult> {
+    const before = new Set(this.state.getPausedScreens())
+    const errors: string[] = []
+    for (const target of this.resolveTargetScreens(screen)) {
+      if (this.state.isPaused(target) === paused) continue
+      const delivered = await signalWallpaperProcess(
+        paused ? 'SIGSTOP' : 'SIGCONT',
+        this.state.getProcess(target),
+        this.screenSignalPattern(target),
+      )
+      if (delivered) {
+        this.state.markPaused([target], paused)
+      } else {
+        errors.push(
+          `${target}: ${paused ? 'process is not running' : 'failed to resume frozen process'}`,
+        )
+      }
+    }
+
+    const after = new Set(this.state.getPausedScreens())
+    const changed = paused
+      ? [...after].filter((s) => !before.has(s))
+      : [...before].filter((s) => !after.has(s))
+    if (changed.length > 0) {
+      invalidationService.emit(paused ? 'wallpaper.paused' : 'wallpaper.resumed')
+    }
+    return {
+      success: errors.length === 0,
+      error: errors.length > 0 ? errors.join('; ') : undefined,
+      screens: changed.length > 0 ? changed : undefined,
+    }
+  }
+
+  private resolveTargetScreens(screen?: string | string[]): string[] {
+    const active = new Set(this.state.getActive().keys())
+    if (Array.isArray(screen)) return screen.filter((target) => active.has(target))
+    if (screen) return active.has(screen) ? [screen] : []
+    return [...active]
+  }
+
+  private screenSignalPattern(screen: string): string | null {
+    if (screen !== 'default') return backendArgPattern('--screen-root', screen)
+    const playlist = playlistService.getActivePlaylistEntries()[screen]
+    if (playlist) return backendArgPattern('--playlist', playlist.name)
+    const backgroundId = this.state.getActive().get(screen)?.backgroundId
+    if (backgroundId) return backendArgPattern('--bg', backgroundId)
+    return null
   }
 
   // ── Overrides ──────────────────────────────────────────────────────────
@@ -280,7 +388,7 @@ class WallpaperService implements IWallpaperService {
 
             let fileSize = 0
             try {
-              const { stdout } = await hostExecAsync(`du -sb "${wallpaperPath}"`)
+              const { stdout } = await hostExecFileAsync('du', ['-sb', wallpaperPath])
               fileSize = parseInt(stdout.split('\t')[0], 10) || 0
             } catch {
               /* ignore */
@@ -342,17 +450,34 @@ class WallpaperService implements IWallpaperService {
     const result: ActiveWallpaperEntry[] = []
 
     for (const [screen, wallpaper] of this.state.getActive().entries()) {
-      if (!this.state.getProcess(screen)) continue
-
       const cached = allWallpapers.find((w) => w.path === wallpaper.backgroundId)
       const title =
         cached?.title ?? wallpaper.backgroundId.split('/').filter(Boolean).pop() ?? 'Unknown'
       const thumbnail = cached?.thumbnail ?? (await resolveThumbnail(wallpaper.backgroundId))
 
-      result.push({ screen, wallpaper, title, thumbnail })
+      result.push({ screen, wallpaper, title, thumbnail, paused: this.state.isPaused(screen) })
     }
 
     return result
+  }
+
+  /**
+   * Drop restored screens (no process handle, so no exit listener) whose
+   * backend process has since died, so they stop showing as active.
+   */
+  private async pruneDeadRestoredScreens(): Promise<void> {
+    const restored = [...this.state.getActive().keys()].filter(
+      (screen) => !this.state.getProcess(screen),
+    )
+    if (restored.length === 0) return
+
+    const processes = await listBackendProcesses()
+    const dead = restored.filter((screen) => !isScreenBackendRunning(screen, processes))
+    if (dead.length === 0) return
+
+    this.state.releaseMany(dead)
+    playlistService.clearActivePlaylist(dead)
+    invalidationService.emit('wallpaper.stopped')
   }
 
   // ── Private: process spawning ──────────────────────────────────────────
@@ -444,7 +569,7 @@ class WallpaperService implements IWallpaperService {
       // Kill orphaned processes
       for (const screen of screens) {
         try {
-          await hostExecAsync(`pkill -9 -f "linux-wallpaperengine.*--screen-root.*${screen}"`)
+          await hostExecFileAsync('pkill', ['-9', '-f', backendArgPattern('--screen-root', screen)])
         } catch {
           /* no process found is ok */
         }
@@ -529,12 +654,14 @@ class WallpaperService implements IWallpaperService {
     })
     this.state.register(screens, proc, options)
     this.captureDebugLogs(proc, screens[0] ?? 'default', args)
+    invalidationService.emit('wallpaper.applied')
   }
 
   // ── Private: reapply ───────────────────────────────────────────────────
 
   private async reapplyAll(): Promise<MutationResult> {
     const errors: string[] = []
+    const pausedScreens = this.state.getPausedScreens()
     const settings = await settingsService.loadSettings()
     const grouped = new Map<string, { screens: string[]; options: ApplyWallpaperOptions }>()
 
@@ -590,17 +717,25 @@ class WallpaperService implements IWallpaperService {
       }
     }
 
+    // Respawned processes start running; keep previously paused screens frozen
+    const repause = await this.setPaused(pausedScreens, true)
+    if (repause.error) errors.push(repause.error)
+
     return {
       success: errors.length === 0,
       error: errors.length > 0 ? errors.join('; ') : undefined,
     }
   }
 
-  private async respawnGrouped(
-    remaining: Array<{ screen: string; options: ApplyWallpaperOptions }>,
-  ): Promise<void> {
+  /** Respawn screens left over from a released shared process, keeping paused ones frozen. */
+  private async respawnGrouped(remaining: RemainingScreen[]): Promise<void> {
     if (remaining.length === 0) return
+    await this.respawnScreens(remaining)
+    const paused = remaining.filter((entry) => entry.paused).map((entry) => entry.screen)
+    await this.setPaused(paused, true)
+  }
 
+  private async respawnScreens(remaining: RemainingScreen[]): Promise<void> {
     const settings = await settingsService.loadSettings()
 
     // Screens that were part of a playlist restart their playlist process —
@@ -716,25 +851,17 @@ class WallpaperService implements IWallpaperService {
 
     try {
       const settings = await settingsService.loadSettings()
-      const { stdout } = await hostExecAsync('pgrep -a linux-wallpaperengine').catch(() => ({
-        stdout: '',
-      }))
-      const processOutput = stdout.trim()
+      const processes = await listBackendProcesses()
 
       if (settings.windowMode) {
-        if (processOutput.length === 0) {
+        if (processes.length === 0) {
           await this.reapplyAll()
         }
         return
       }
 
-      for (const [screen] of this.state.getActive().entries()) {
-        const isRunning =
-          screen === 'default'
-            ? processOutput.length > 0 && !processOutput.includes('--screen-root')
-            : processOutput.includes(`--screen-root ${screen}`)
-
-        if (!isRunning) {
+      for (const screen of this.state.getActive().keys()) {
+        if (!isScreenBackendRunning(screen, processes)) {
           await this.reapplyAll()
           return
         }

@@ -1,4 +1,5 @@
-import { Square, Volume2, VolumeX, Monitor, ListVideo } from 'lucide-react'
+import { useState } from 'react'
+import { Square, Volume2, VolumeX, Monitor, ListVideo, Pause, Play } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -51,6 +52,9 @@ export function StatusBar({ className }: StatusBarProps) {
 
   const stopMutation = trpc.wallpaper.stopWalpaper.useMutation()
   const stopPlaylistMutation = trpc.playlist.stop.useMutation()
+  const pauseMutation = trpc.wallpaper.pause.useMutation()
+  const resumeMutation = trpc.wallpaper.resume.useMutation()
+  const [pauseFailure, setPauseFailure] = useState<{ key: string; message: string } | null>(null)
   const updateSettingsMutation = trpc.settings.update.useMutation()
   const utils = trpc.useUtils()
   const navigate = useNavigate()
@@ -67,6 +71,12 @@ export function StatusBar({ className }: StatusBarProps) {
 
   // Playlist driving the shown wallpaper's screen, if any
   const activePlaylist = activePlaylists.find((entry) => entry.screen === activeWallpaper?.screen)
+  const isPaused = activeWallpaper?.paused ?? false
+  // A pause/resume failure only describes the wallpaper and state it happened in
+  const pauseKey = activeWallpaper
+    ? `${activeWallpaper.screen}|${activeWallpaper.wallpaper.backgroundId}|${isPaused}`
+    : null
+  const pauseError = pauseFailure?.key === pauseKey ? pauseFailure.message : null
 
   const hasMultipleScreens = displays.length > 1
   const otherActiveCount = activeWallpapers.filter(
@@ -109,6 +119,21 @@ export function StatusBar({ className }: StatusBarProps) {
     void utils.settings.get.invalidate()
   }
 
+  // Active-state queries refresh from the service's paused/resumed invalidation events
+  const handlePauseToggle = async () => {
+    if (!activeWallpaper || !pauseKey) return
+    const mutation = isPaused ? resumeMutation : pauseMutation
+    const result = await mutation.mutateAsync({ screen: activeWallpaper.screen })
+    setPauseFailure(
+      result.success
+        ? null
+        : {
+            key: pauseKey,
+            message: result.error ?? `Failed to ${isPaused ? 'resume' : 'pause'}`,
+          },
+    )
+  }
+
   return (
     <footer
       className={cn(
@@ -136,7 +161,7 @@ export function StatusBar({ className }: StatusBarProps) {
         <div className="flex items-center gap-2">
           {activeWallpaper ? (
             <>
-              <div className="bg-success size-2 rounded-full" />
+              <div className={cn('size-2 rounded-full', isPaused ? 'bg-warning' : 'bg-success')} />
               {activePlaylist ? (
                 // The backend rotates playlist wallpapers internally, so the
                 // current title is unknown — show the playlist itself instead
@@ -178,6 +203,20 @@ export function StatusBar({ className }: StatusBarProps) {
       </div>
 
       <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="size-7"
+          onClick={handlePauseToggle}
+          disabled={!activeWallpaper}
+          title={pauseError ?? (isPaused ? 'Resume wallpaper' : 'Pause wallpaper')}
+        >
+          {isPaused ? (
+            <Play className={cn('size-3.5', pauseError && 'text-destructive')} />
+          ) : (
+            <Pause className={cn('size-3.5', pauseError && 'text-destructive')} />
+          )}
+        </Button>
         <Button
           variant="ghost"
           size="icon-sm"

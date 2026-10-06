@@ -13,6 +13,16 @@ export interface ActiveWallpaperEntry {
   wallpaper: ApplyWallpaperOptions
   title: string
   thumbnail: string
+  // Whether the screen's process is currently frozen (paused)
+  paused: boolean
+}
+
+// A screen that shared a released process and has to be respawned
+export interface RemainingScreen {
+  screen: string
+  options: ApplyWallpaperOptions
+  // Whether it was paused, so the respawned process can be frozen again
+  paused: boolean
 }
 
 export interface DebugInfo {
