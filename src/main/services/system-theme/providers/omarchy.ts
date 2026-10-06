@@ -1,7 +1,6 @@
-import { homedir } from 'node:os'
 import path from 'node:path'
-import type { DesktopThemeProvider, SystemThemePalette } from '../system-theme.types'
-import { inferScheme, readText, subtleSidebarColor } from '../system-theme.utils'
+import type { SystemThemePalette } from '../system-theme.types'
+import { subtleSidebarColor } from '../system-theme.utils'
 
 const HEX_COLOR_PATTERN = /^#[\da-f]{6}(?:[\da-f]{2})?$/i
 
@@ -23,10 +22,6 @@ export const getOmarchyWatchPaths = (homeDirectory: string): string[] => [
   // marker in its stable parent directory.
   path.join(homeDirectory, '.local/state/omarchy/current/theme.name'),
 ]
-
-const OMARCHY_THEME_PATHS = getOmarchyThemePaths(homedir())
-const OMARCHY_HYPRLAND_PATHS = getOmarchyHyprlandPaths(homedir())
-const OMARCHY_WATCH_PATHS = getOmarchyWatchPaths(homedir())
 
 export const parseOmarchyTheme = (source: string): SystemThemePalette | null => {
   const colors = Object.fromEntries(
@@ -73,135 +68,3 @@ export const parseOmarchyTheme = (source: string): SystemThemePalette | null => 
     sidebarRing: accent,
   }
 }
-
-const parseHyprColor = (value: string | undefined): string | undefined => {
-  if (value === undefined) return undefined
-  const match =
-    value.match(/#([\da-f]{6})(?:[\da-f]{2})?/i) ??
-    value.match(/rgba?\(\s*([\da-f]{6})(?:[\da-f]{2})?\s*\)/i) ??
-    value.match(/^\s*["']?([\da-f]{6})(?:[\da-f]{2})?["']?\s*$/i)
-  return match === null ? undefined : `#${match[1]}`
-}
-
-const findLuaVariableColor = (source: string, names: string[]): string | undefined => {
-  for (const name of names) {
-    const declaration = source.match(new RegExp(`\\blocal\\s+${name}\\s*=`, 'i'))
-    if (declaration?.index === undefined) continue
-    const start = declaration.index + declaration[0].length
-    const end = source.slice(start).search(/\n\s*(?:local\s+|hl\.|o\.)/)
-    const expression = source.slice(start, end < 0 ? undefined : start + end)
-    const color = parseHyprColor(expression)
-    if (color !== undefined) return color
-  }
-  return undefined
-}
-
-const findLuaAssignedColor = (source: string, keys: string[]): string | undefined => {
-  for (const key of keys) {
-    const assignment = source.match(
-      new RegExp(
-        `(?:\\["${key.replace('.', '\\.')}"\\]|\\b${key.replace('.', '\\.')})\\s*=\\s*([^,\\n}]+)`,
-        'i',
-      ),
-    )
-    if (assignment === null) continue
-    const direct = parseHyprColor(assignment[1])
-    if (direct !== undefined) return direct
-    const variable = assignment[1].trim().match(/^([\w]+)$/)?.[1]
-    if (variable !== undefined) {
-      const resolved = findLuaVariableColor(source, [variable])
-      if (resolved !== undefined) return resolved
-    }
-    const fromTable = parseHyprColor(source.slice(assignment.index, (assignment.index ?? 0) + 500))
-    if (fromTable !== undefined) return fromTable
-  }
-  return undefined
-}
-
-export const parseOmarchyHyprlandTheme = (source: string): SystemThemePalette | null => {
-  const namedColors = Object.fromEntries(
-    Array.from(
-      source.matchAll(
-        /^\s*(background|bg|surface|surface_alt|foreground|fg|accent|active|border|muted)\s*=\s*["']([^"']+)["']/gim,
-      ),
-    )
-      .map(([, key, value]) => [key.toLowerCase(), parseHyprColor(value)])
-      .filter((entry): entry is [string, string] => entry[1] !== undefined),
-  )
-
-  const background = namedColors.background ?? namedColors.bg
-  const foreground = namedColors.foreground ?? namedColors.fg
-  const activeBorder =
-    namedColors.accent ??
-    namedColors.active ??
-    findLuaVariableColor(source, ['active_border_color', 'activeBorderColor']) ??
-    findLuaAssignedColor(source, ['col.active_border', 'active_border', 'border_active'])
-  const inactiveBorder =
-    namedColors.border ??
-    namedColors.muted ??
-    findLuaVariableColor(source, ['inactive_border_color', 'inactiveBorderColor']) ??
-    findLuaAssignedColor(source, ['col.inactive_border', 'inactive_border', 'border_inactive'])
-  const surface = namedColors.surface ?? background
-  const selection = namedColors.surface_alt ?? inactiveBorder ?? surface
-
-  if (
-    background === undefined &&
-    foreground === undefined &&
-    activeBorder === undefined &&
-    inactiveBorder === undefined
-  )
-    return null
-
-  const activeForeground =
-    background ?? (inferScheme(activeBorder) === 'light' ? '#000000' : '#ffffff')
-  return {
-    background,
-    foreground,
-    card: surface,
-    cardForeground: foreground,
-    primary: activeBorder,
-    primaryForeground: activeForeground,
-    secondary: surface,
-    secondaryForeground: foreground,
-    muted: surface,
-    mutedForeground: foreground,
-    accent: selection,
-    accentForeground: foreground,
-    border: inactiveBorder,
-    input: surface,
-    ring: activeBorder,
-    sidebar: background,
-    sidebarForeground: foreground,
-    sidebarPrimary: subtleSidebarColor(activeBorder, background),
-    sidebarPrimaryForeground: foreground,
-    sidebarAccent: selection,
-    sidebarAccentForeground: foreground,
-    sidebarBorder: inactiveBorder,
-    sidebarRing: activeBorder,
-  }
-}
-
-const readOmarchyPalette = (): SystemThemePalette | null => {
-  for (const filePath of OMARCHY_THEME_PATHS) {
-    const source = readText(filePath)
-    if (source !== null) {
-      const theme = parseOmarchyTheme(source)
-      if (theme !== null) return theme
-    }
-  }
-
-  for (const filePath of OMARCHY_HYPRLAND_PATHS) {
-    const source = readText(filePath)
-    if (source !== null) {
-      const theme = parseOmarchyHyprlandTheme(source)
-      if (theme !== null) return theme
-    }
-  }
-  return null
-}
-
-export const omarchyThemeProvider = {
-  matches: (desktop: string) => desktop.includes('hyprland') || desktop.includes('omarchy'),
-  watchPaths: OMARCHY_WATCH_PATHS,
-  readPalette: readOmarchyPalette,
-} satisfies DesktopThemeProvider
