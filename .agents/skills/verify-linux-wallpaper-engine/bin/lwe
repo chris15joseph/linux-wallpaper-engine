@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+# Verification harness for Linux Wallpaper Engine. See ../SKILL.md.
+#   lwe setup                     install playwright-core into the tools cache (once)
+#   lwe launch [web|desktop]      start an isolated dev instance + CDP endpoint, wait until ready
+#   lwe doctor                    read-only health check of the current run
+#   lwe drive <cmd> [flags]       drive the UI over CDP (see bin/drive.mjs)
+#   lwe store [settings|active-wallpapers|wallpaper-overrides]   print the run's isolated store JSON
+#   lwe backends                  list linux-wallpaperengine processes (ours vs pre-existing)
+#   lwe steam-config [path|diff|restore]   the shared Steam config.json that holds playlists
+#   lwe cleanup                   kill what this run started, delete scratch, keep artifacts
+set -euo pipefail
+
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_DIR="$(cd "$SKILL_DIR/../../.." && pwd)"
+ROOT="${LWE_VERIFY_ROOT:-/tmp/lwe-verify}"
+export LWE_TOOLS_DIR="${LWE_TOOLS_DIR:-$SKILL_DIR/.tools}"
+PLAYWRIGHT_VERSION=1.58.2
+DEV_BACKEND_PORT=5180 # src/shared/constants/development.ts
+STORE_DIR_NAME='Linux Wallpaper Engine'
+
+die() { echo "lwe: $*" >&2; exit 1; }
+
+run_dir() {
+  local dir="${LWE_RUN:-}"
+  [[ -z "$dir" && -L "$ROOT/current" ]] && dir="$(readlink -f "$ROOT/current")"
+  [[ -n "$dir" && -f "$dir/state.env" ]] || die "no active run (launch first, or set LWE_RUN=<run dir>)"
+  echo "$dir"
+}
+
+load_state() {
+  RUN="$(run_dir)"
+  # shellcheck disable=SC1091
+  source "$RUN/state.env"
+}
+
+port_busy() { ss -ltnH "( sport = :$1 )" 2>/dev/null | grep -q .; }
+
+free_port() {
+  local port
+  for port in $(seq "$1" $(( $1 + 50 ))); do port_busy "$port" || { echo "$port"; return; }; done
+  die "no free port near $1"
+}
+
+group_alive() { [[ -n "${1:-}" ]] && kill -0 -- "-$1" 2>/dev/null; }
+
+find_browser() {
+  local candidate
+  for candidate in "${LWE_BROWSER:-}" chromium google-chrome-stable google-chrome chromium-browser; do
+    [[ -n "$candidate" ]] && command -v "$candidate" >/dev/null && { command -v "$candidate"; return; }
+  done
+  die "no Chromium found (set LWE_BROWSER=/path/to/chromium)"
+}
+
+# Backend pids whose parent is a process in our dev group (spawned by our Electron main)
+our_backends() {
+  local pid ppid
+  [[ -n "${DEV_PGID:-}" ]] || return 0
+  while read -r pid ppid; do
+    [[ -z "$pid" ]] && continue
+    [[ "$(ps -o pgid= -p "$ppid" 2>/dev/null | tr -d ' ')" == "$DEV_PGID" ]] && echo "$pid"
+    grep -qx "$pid" "$RUN/backends.ours" 2>/dev/null && echo "$pid"
+  done < <(pgrep -f '^[^ ]*linux-wallpaperengine[^ ]*( |$)' | xargs -r ps -o pid=,ppid= -p) | sort -u
+}
+
+# Playlists live in Steam's wallpaper_engine/config.json, shared with the user's real app (NOT isolated)
+steam_config_path() {
+  local root lib
+  for root in ~/.local/share/Steam ~/.steam/steam ~/.var/app/com.valvesoftware.Steam/.local/share/Steam \
+    ~/.var/app/com.valvesoftware.Steam/.data/Steam ~/.var/app/com.valvesoftware.Steam/.steam/steam; do
+    for lib in "$root" $(grep -o '"path"[[:space:]]*"[^"]*"' "$root/steamapps/libraryfolders.vdf" 2>/dev/null | cut -d'"' -f4); do
+      [[ -f "$lib/steamapps/common/wallpaper_engine/config.json" ]] && { readlink -f "$lib/steamapps/common/wallpaper_engine/config.json"; return; }
+    done
+  done
+}
+
+cmd_setup() {
+  if [[ -f "$LWE_TOOLS_DIR/node_modules/playwright-core/package.json" ]]; then
+    echo "playwright-core present in $LWE_TOOLS_DIR"
+    return
+  fi
+  mkdir -p "$LWE_TOOLS_DIR"
+  npm install --silent --no-audit --no-fund --prefix "$LWE_TOOLS_DIR" "playwright-core@$PLAYWRIGHT_VERSION"
+  echo "installed playwright-core@$PLAYWRIGHT_VERSION into $LWE_TOOLS_DIR"
+}
+
+cmd_launch() {
+  local target="${1:-web}"
+  [[ "$target" == web || "$target" == desktop ]] || die "target must be web or desktop"
+  cmd_setup >/dev/null
+  command -v bun >/dev/null || die "bun not on PATH"
+  [[ -d "$REPO_DIR/node_modules" ]] || die "run 'bun install --frozen-lockfile' in $REPO_DIR first"
+
+  if [[ -L "$ROOT/current" ]] && [[ -f "$ROOT/current/state.env" ]]; then
+    # shellcheck disable=SC1091
+    ( source "$ROOT/current/state.env"; group_alive "$DEV_PGID" ) &&
+      die "a run is already active at $(readlink -f "$ROOT/current") — 'lwe cleanup' it first"
+  fi
+  if [[ "$target" == web ]] && port_busy "$DEV_BACKEND_PORT"; then
+    die "port $DEV_BACKEND_PORT (web dev backend) is taken by another 'bun dev' — not ours, refusing to double-drive. Use 'lwe launch desktop' or stop that instance."
+  fi
+
+  local run_id="${LWE_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$target}"
+  local run="$ROOT/$run_id"
+  mkdir -p "$run/config" "$run/artifacts" "$run/logs"
+  ln -sfn "$run" "$ROOT/current"
+  local cdp_port; cdp_port="$(free_port 9333)"
+
+  local steam_config; steam_config="$(steam_config_path || true)"
+  [[ -n "$steam_config" ]] && cp "$steam_config" "$run/artifacts/steam-config.before.json"
+
+  # Snapshot backend processes that existed before us; never touch these
+  pgrep -af '^[^ ]*linux-wallpaperengine[^ ]*( |$)' > "$run/backends.before" || true
+
+  # forge exits when stdin hits EOF, so feed it a stdin that never closes.
+  # setsid puts forge + vite + electron in one process group we own.
+  local electron_args=""
+  [[ "$target" == desktop ]] && electron_args="-- --remote-debugging-port=$cdp_port"
+  (
+    cd "$REPO_DIR"
+    setsid bash -c "sleep infinity | XDG_CONFIG_HOME='$run/config' DEV_TARGET=$target exec node_modules/.bin/electron-forge start $electron_args" \
+      > "$run/logs/dev.log" 2>&1 < /dev/null &
+    echo $! > "$run/dev.pgid"
+  )
+  local dev_pgid; dev_pgid="$(cat "$run/dev.pgid")"
+
+  local url="" i
+  for i in $(seq 1 120); do
+    group_alive "$dev_pgid" || { tail -30 "$run/logs/dev.log" >&2; die "dev process exited during startup"; }
+    if [[ "$target" == web ]]; then
+      url="$(grep -o 'Web preview: http[^ ]*' "$run/logs/dev.log" | head -1 | cut -d' ' -f3 || true)"
+    else
+      url="$(grep -oE 'Local: +http://[^ ]+' "$run/logs/dev.log" | sed 's/\x1b\[[0-9;]*m//g' | head -1 | awk '{print $2}' || true)"
+      grep -q 'Launched Electron app' "$run/logs/dev.log" || url=""
+    fi
+    [[ -n "$url" ]] && break
+    sleep 1
+  done
+  [[ -n "$url" ]] || die "timed out waiting for the app; see $run/logs/dev.log"
+  url="${url%/}"
+
+  local browser_pgid=""
+  if [[ "$target" == web ]]; then
+    # Must open the exact printed origin (localhost, not 127.0.0.1): the backend rejects other WS origins
+    setsid "$(find_browser)" --headless=new --remote-debugging-port="$cdp_port" \
+      --user-data-dir="$run/chrome" --window-size=1400,900 --no-first-run --no-default-browser-check \
+      "$url/" > "$run/logs/browser.log" 2>&1 < /dev/null &
+    browser_pgid=$!
+  fi
+
+  for i in $(seq 1 60); do
+    curl -sf "http://127.0.0.1:$cdp_port/json/list" 2>/dev/null | grep -q "${url#http://}" && break
+    sleep 1
+  done
+  curl -sf "http://127.0.0.1:$cdp_port/json/list" | grep -q "${url#http://}" || die "CDP on :$cdp_port has no page at $url"
+
+  cat > "$run/state.env" <<EOF
+RUN_ID=$run_id
+TARGET=$target
+APP_URL=$url
+CDP_PORT=$cdp_port
+DEV_PGID=$dev_pgid
+BROWSER_PGID=$browser_pgid
+STORE_DIR='$run/config/$STORE_DIR_NAME'
+STEAM_CONFIG='$steam_config'
+GIT_REV=$(git -C "$REPO_DIR" rev-parse --short HEAD)$(git -C "$REPO_DIR" diff --quiet || echo -dirty)
+EOF
+  # Wait for the renderer to mount (sidebar nav is always present)
+  LWE_RUN="$run" "$0" drive wait --role button --name Installed --timeout 30000 >/dev/null
+  echo "ready: run=$run target=$target app=$url cdp=http://127.0.0.1:$cdp_port"
+  echo "artifacts: $run/artifacts"
+}
+
+cmd_doctor() {
+  load_state
+  local ok=1
+  check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; ok=0; fi; }
+  echo "run $RUN_ID ($TARGET) at $RUN, built from $GIT_REV (HEAD now $(git -C "$REPO_DIR" rev-parse --short HEAD))"
+  check "dev process group $DEV_PGID alive" 'group_alive "$DEV_PGID"'
+  [[ -n "$BROWSER_PGID" ]] && check "headless browser group $BROWSER_PGID alive" 'group_alive "$BROWSER_PGID"'
+  check "renderer answers at $APP_URL" 'curl -sf -o /dev/null "$APP_URL/"'
+  check "CDP :$CDP_PORT has a page on $APP_URL" 'curl -sf "http://127.0.0.1:$CDP_PORT/json/list" | grep -q "${APP_URL#http://}"'
+  if [[ "$TARGET" == web ]]; then
+    local owner; owner="$(ss -ltnpH "( sport = :$DEV_BACKEND_PORT )" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)"
+    check "backend :$DEV_BACKEND_PORT owned by our group" '[[ -n "$owner" && "$(ps -o pgid= -p "$owner" | tr -d " ")" == "$DEV_PGID" ]]'
+  fi
+  local electron_main; electron_main="$(pgrep -g "$DEV_PGID" -f 'electron/dist/electron' | head -1 || true)"
+  check "Electron main uses isolated XDG_CONFIG_HOME" '[[ -n "$electron_main" ]] && tr "\0" "\n" < /proc/$electron_main/environ | grep -qx "XDG_CONFIG_HOME=$RUN/config"'
+  check "isolated store dir exists" '[[ -d "$STORE_DIR" ]]'
+  check "renderer mounted (Installed nav visible)" 'LWE_RUN="$RUN" "$0" drive wait --role button --name Installed --timeout 5000 >/dev/null 2>&1'
+  cmd_backends | sed 's/^/     /'
+  [[ $ok == 1 ]] && echo "healthy" || { echo "UNHEALTHY — fix or 'lwe cleanup' and relaunch"; return 1; }
+}
+
+cmd_drive() {
+  load_state
+  node "$SKILL_DIR/bin/drive.mjs" "http://127.0.0.1:$CDP_PORT" "$APP_URL" "$@"
+}
+
+cmd_store() {
+  load_state
+  local name="${1:-settings}"
+  cat "$STORE_DIR/$name.json" 2>/dev/null || echo "{} (no $name.json yet — store writes on first change)"
+}
+
+cmd_backends() {
+  load_state
+  local ours; ours="$(our_backends | tr '\n' ' ')"
+  echo "backends started by this run: ${ours:-none}"
+  local before; before="$(wc -l < "$RUN/backends.before")"
+  echo "backends that existed before launch (never touch): $before"
+  [[ "$before" -gt 0 ]] && sed 's/^/  /' "$RUN/backends.before"
+  return 0
+}
+
+cmd_steam_config() {
+  load_state
+  [[ -n "${STEAM_CONFIG:-}" ]] || die "no Steam wallpaper_engine/config.json was found at launch"
+  local before="$RUN/artifacts/steam-config.before.json"
+  case "${1:-path}" in
+    path) echo "$STEAM_CONFIG (backup from launch: $before)" ;;
+    diff) diff <(jq -S . "$before") <(jq -S . "$STEAM_CONFIG") && echo "unchanged since launch" ;;
+    restore)
+      # Overwrites the user's live playlists file; only do this for changes this run made
+      cp "$STEAM_CONFIG" "$RUN/artifacts/steam-config.pre-restore.json"
+      cp "$before" "$STEAM_CONFIG"
+      echo "restored $STEAM_CONFIG from $before (previous copy in artifacts/steam-config.pre-restore.json)" ;;
+    *) die "steam-config [path|diff|restore]" ;;
+  esac
+}
+
+cmd_cleanup() {
+  load_state
+  # Remember backend children before killing their parent (they reparent afterwards)
+  our_backends >> "$RUN/backends.ours" || true
+  local pid
+  for pid in $(sort -u "$RUN/backends.ours" 2>/dev/null); do
+    kill -9 "$pid" 2>/dev/null && echo "killed backend $pid (started by this run)"
+  done
+  local group
+  for group in "$BROWSER_PGID" "$DEV_PGID"; do
+    [[ -z "$group" ]] && continue
+    kill -TERM -- "-$group" 2>/dev/null || true
+  done
+  local i
+  for i in $(seq 1 10); do
+    group_alive "$BROWSER_PGID" || group_alive "$DEV_PGID" || break
+    sleep 1
+  done
+  for group in "$BROWSER_PGID" "$DEV_PGID"; do
+    group_alive "$group" && kill -KILL -- "-$group" 2>/dev/null || true
+  done
+  # Scratch goes; artifacts/ and logs/ stay as evidence
+  rm -rf "$RUN/config" "$RUN/chrome"
+  [[ "$(readlink -f "$ROOT/current" 2>/dev/null)" == "$RUN" ]] && rm -f "$ROOT/current"
+  mv "$RUN/state.env" "$RUN/state.env.done"
+  echo "cleaned up run $RUN_ID; evidence kept in $RUN/artifacts and $RUN/logs"
+  if [[ -n "${STEAM_CONFIG:-}" ]] && ! cmp -s "$STEAM_CONFIG" "$RUN/artifacts/steam-config.before.json"; then
+    echo "warning: Steam playlists config changed during this run: $STEAM_CONFIG"
+    echo "         inspect with: diff <(jq -S . '$RUN/artifacts/steam-config.before.json') <(jq -S . '$STEAM_CONFIG')"
+  fi
+  port_busy "$CDP_PORT" && echo "warning: CDP port $CDP_PORT still listening"
+  [[ "$TARGET" == web ]] && port_busy "$DEV_BACKEND_PORT" && echo "warning: :$DEV_BACKEND_PORT still listening"
+  return 0
+}
+
+sub="${1:-}"; shift || true
+case "$sub" in
+  setup) cmd_setup ;;
+  launch) cmd_launch "$@" ;;
+  doctor) cmd_doctor ;;
+  drive) cmd_drive "$@" ;;
+  store) cmd_store "$@" ;;
+  backends) cmd_backends ;;
+  steam-config) cmd_steam_config "$@" ;;
+  cleanup) cmd_cleanup ;;
+  *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
