@@ -34,20 +34,20 @@ bun install --frozen-lockfile
 bun dev
 ```
 
-### Vite+ commands
+`bun dev` starts the web preview only: the backend runs in Electron without a window, and the app opens in a browser at the printed `Web preview:` URL. The project uses [Vite+](https://viteplus.dev), so each script also runs through the `vp` CLI (installed locally, so `bunx vp ...` works without a global install):
 
-The project uses [Vite+](https://viteplus.dev). Each `bun run <script>` also works through the `vp` CLI (installed locally, so `bunx vp ...` works without a global install):
+| bun                                 | Vite+                       | Does                           |
+| ----------------------------------- | --------------------------- | ------------------------------ |
+| `bun dev`                           | `vp run dev`                | Web preview only               |
+| `bun run dev:desktop` / `bun ddev`  | `vp run dev:desktop`        | Desktop window only            |
+| `bun run dev:full` / `bun fdev`     | `vp run dev:full`           | Web preview and desktop window |
+| `bun run make`                      | `vp run make`               | Build packages                 |
+| `bun run check`                     | `vp run check`              | Lint and type check            |
+| `bun run lint` / `bun run lint:fix` | `vp lint` / `vp lint --fix` | Lint                           |
+| `bun run fmt` / `bun run fmt:check` | `vp fmt` / `vp fmt --check` | Format                         |
+| `bun run test` / `bun run test:w`   | `vp test` / `vp test watch` | Test                           |
 
-| bun                                 | Vite+                       |
-| ----------------------------------- | --------------------------- |
-| `bun dev`                           | `vp run dev`                |
-| `bun run make`                      | `vp run make`               |
-| `bun run check`                     | `vp run check`              |
-| `bun run lint` / `bun run lint:fix` | `vp lint` / `vp lint --fix` |
-| `bun run fmt` / `bun run fmt:check` | `vp fmt` / `vp fmt --check` |
-| `bun run test` / `bun run test:w`   | `vp test` / `vp test watch` |
-
-`vp check` runs format, lint and type checks in one pass. Use `vp run dev`, not `vp dev`: `vp dev` is Vite's own dev server without Electron.
+Native features that need a window, such as the tray, only run with `dev:desktop` or `dev:full`. `vp check` runs format, lint and type checks in one pass. Use `vp run dev`, not `vp dev`: `vp dev` is Vite's own dev server without Electron.
 
 ### Building Packages
 
@@ -111,7 +111,7 @@ vite.config.mts            # Vite+ config: main, preload and renderer builds, pl
 
 Each build in `vite.config.mts` has `@` and `~` aliases pointing to its respective `src/` subdirectory.
 
-The renderer communicates with the main process through tRPC — IPC in the Electron window, plus a development-only WebSocket bridge so the `bun dev` renderer URL also works in a browser tab. This gives full type safety across process boundaries. You can check out my [react-electron-template](https://github.com/jagrat7/react-electron-template) for details on how I setup the app.
+The renderer communicates with the main process through tRPC — IPC in the Electron window, plus a development-only WebSocket bridge so the renderer URL from `bun dev` and `bun run dev:full` also works in a browser tab. This gives full type safety across process boundaries. You can check out my [react-electron-template](https://github.com/jagrat7/react-electron-template) for details on how I setup the app.
 
 TLDR: UI React stuff is in `renderer/` and the "backend" logic is in `main/`.
 

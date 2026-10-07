@@ -19,12 +19,19 @@ import { resolveAssetPath } from './utils/assets.ts'
 import { createAppTray, type AppTray } from './utils/tray.ts'
 import { invalidationService } from './services/invalidation.ts'
 import { systemThemeService } from './services/system-theme/system-theme.ts'
+import { DEV_TARGETS, type DevTarget } from '../shared/constants/development.ts'
 
 // Global ref to tray to avoid GC
 let appTray: AppTray | null = null
 let isQuitting = false
 
 systemThemeService.configureElectronPlatform(nativeTheme, systemPreferences)
+
+// Packaged builds always open the desktop window; `bun dev` scripts pick a target through DEV_TARGET
+const devTarget: DevTarget = MAIN_WINDOW_VITE_DEV_SERVER_URL
+  ? (DEV_TARGETS.find((target) => target === process.env.DEV_TARGET) ?? 'desktop')
+  : 'desktop'
+const opensWindow = devTarget !== 'web'
 
 const appIcon = nativeImage.createFromPath(resolveAssetPath('transparent-logo.png'))
 
@@ -101,30 +108,34 @@ void app.whenReady().then(() => {
     return net.fetch(`file://${filePath}`)
   })
 
-  const mainWindow = createWindow()
+  if (opensWindow) {
+    const mainWindow = createWindow()
 
-  appTray = createAppTray({ mainWindow, appIcon, isQuitting: () => isQuitting })
+    appTray = createAppTray({ mainWindow, appIcon, isQuitting: () => isQuitting })
 
-  if (settings.getSetting('enableSystemTray')) appTray.ensure()
+    if (settings.getSetting('enableSystemTray')) appTray.ensure()
 
-  mainWindow.on('close', (e) => {
-    if (shouldMinimizeOnClose() && !isQuitting) {
-      e.preventDefault()
-      mainWindow.hide()
-      appTray?.ensure()
-    }
-  })
+    mainWindow.on('close', (e) => {
+      if (shouldMinimizeOnClose() && !isQuitting) {
+        e.preventDefault()
+        mainWindow.hide()
+        appTray?.ensure()
+      }
+    })
 
-  createIPCHandler({
-    router: appRouter,
-    windows: [mainWindow],
-    createContext: async () => createTrpcContext(),
-  })
+    createIPCHandler({
+      router: appRouter,
+      windows: [mainWindow],
+      createContext: async () => createTrpcContext(),
+    })
+  }
 
   // Dev only (undefined in packaged builds): serve the same router to browser tabs
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+  const devServerUrl = MAIN_WINDOW_VITE_DEV_SERVER_URL
+  if (devServerUrl && devTarget !== 'desktop') {
     import('./development/gateway.ts')
-      .then(({ startDevGateway }) => startDevGateway(MAIN_WINDOW_VITE_DEV_SERVER_URL))
+      .then(({ startDevGateway }) => startDevGateway(devServerUrl))
+      .then(() => console.log(`Web preview: ${devServerUrl}`))
       .catch((error: unknown) => console.error('Browser dev backend failed to start:', error))
   }
 
@@ -156,7 +167,7 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   // On OS X it's common to re-create a window in the app when the
   // dock icon is clicked and there are no other windows open.
-  if (BrowserWindow.getAllWindows().length === 0) {
+  if (opensWindow && BrowserWindow.getAllWindows().length === 0) {
     createWindow()
   }
 })

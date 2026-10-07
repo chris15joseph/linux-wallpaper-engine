@@ -32,7 +32,11 @@
   },
   "main": ".vite/build/main.js",
   "scripts": {
-    "dev": "electron-forge start",
+    "dev": "DEV_TARGET=web electron-forge start",
+    "dev:desktop": "DEV_TARGET=desktop electron-forge start",
+    "ddev": "bun run dev:desktop",
+    "dev:full": "DEV_TARGET=full electron-forge start",
+    "fdev": "bun run dev:full",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "built": "DEBUG=* ELECTRON_ENABLE_LOGGING=1 './out/Linux Wallpaper Engine-linux-x64/linux-wallpaper-engine'",
